@@ -27,6 +27,7 @@ class GridMap:
         return False
 
     def get_neighbors(self, pos):
+        # Specifically only used for A* as of right now
         x, y = pos
         directions = [(x, y-1), (x, y+1), (x-1, y), (x+1, y)]
         return [n for n in directions if not self.is_blocked(n)]
@@ -75,6 +76,7 @@ class AdaptiveShadow:
     def __init__(self, breadcrumbs):
         self.breadcrumbs = breadcrumbs
         self.current_tick = 0
+        self.next_target = 0
         self.position = breadcrumbs[0]
         self.state = "REPLAYING"
         self.recalculated_path = []
@@ -94,21 +96,33 @@ class AdaptiveShadow:
                 next_pos = self.breadcrumbs[self.current_tick + 2]
                 self.state = "PATHFINDING"
                 self.recalculated_path = a_star_search(grid_map, self.position, next_pos)
-            else:
+                self.current_tick += 1
+                self.next_target = 0
+            elif not grid_map.is_blocked(next_pos):
                 self.position = next_pos
+                self.current_tick += 1
             
-            self.current_tick += 1
-
-        if self.state == "PATHFINDING" and self.recalculated_path:
-            next_ai_pos = self.recalculated_path[0]
-            # Validasi ulang jika tiba-tiba ada balok baru yang didorong pemain ke jalur A*
-            if not grid_map.is_blocked(next_ai_pos):
-                self.position = self.recalculated_path.pop(0)
-            else:
-                # Kalkulasi ulang jalan jika terblokir lagi
-                self.recalculated_path = a_star_search(grid_map, self.position, self.current_tick + 2)
-        elif self.state == "PATHFINDING":
-            self.state = "REPLAYING"
+        # Pathfinding A* is only used to bypass obstacles, the path moving forwad uses replaying
+        if self.state == "PATHFINDING":
+            if self.position == self.breadcrumbs[self.current_tick + self.next_target]:
+                # We made it
+                self.state = "REPLAYING"
+                self.current_tick += self.next_target
+            elif self.next_target >= len(self.breadcrumbs) - 1:
+                # A* literally could not find a path to conitnue
+                self.current_tick -= 1
+                self.state = "REPLAYING"
+            elif self.recalculated_path:
+                next_ai_pos = self.recalculated_path[0]
+                # Validasi ulang jika tiba-tiba ada balok baru yang didorong pemain ke jalur A*
+                if not grid_map.is_blocked(next_ai_pos):
+                    self.position = self.recalculated_path.pop(0)
+                self.next_target = 0
+            elif not self.recalculated_path:
+                # Recalculate getting further
+                self.next_target = min(self.next_target + 1, len(self.breadcrumbs) - self.current_tick - 1)
+                self.recalculated_path = a_star_search(grid_map, self.position, self.breadcrumbs[self.current_tick + self.next_target])
+                
 
 
         return self.position
