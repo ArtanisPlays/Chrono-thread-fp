@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Chrono-Thread Prototype</title>
+    <style>
+        body { font-family: monospace; display: flex; flex-direction: column; align-items: center; background: #222; color: #fff; }
+        canvas { border: 2px solid #555; background: #333; margin-top: 20px; cursor: crosshair; }
+        .controls { margin-top: 15px; text-align: center; }
+        .key { display: inline-block; padding: 5px 10px; background: #555; border-radius: 4px; margin: 2px; }
+    </style>
+</head>
+<body>
+    <h2>Adaptive Shadow (A-Star Time Loop)</h2>
+
+    <!-- Tambahkan ini tepat di atas tag <canvas> -->
+    <div id="menu" style="margin-bottom: 10px;">
+        <label for="levelSelect">Pilih Level: </label>
+        <select id="levelSelect" onchange="changeLevel(this.value)">
+            <option value="1">Level 1: The Co-op Loop</option>
+            <option value="2">Level 2: The Butterfly Effect</option>
+        </select>
+    </div>
+
+    <canvas id="gameCanvas" width="500" height="500"></canvas>
+    <div class="controls">
+        <p>Gunakan <span class="key">W</span> <span class="key">A</span> <span class="key">S</span> <span class="key">D</span> untuk bergerak.</p>
+        <p>Tekan <span class="key">T</span> untuk <b>Rewind</b> (Buat Bayangan).</p>
+        <p>Tekan <span class="key">R</span> untuk <b>Reset Total</b> (Hapus Semua).</p>
+        <!-- <p><b>Klik Kiri</b> pada kotak untuk meletakkan Tembok.</p> -->
+    </div>
+
+    <script>
+        const canvas = document.getElementById("gameCanvas");
+        const ctx = canvas.getContext("2d");
+        const TILE_SIZE = 50;
+        const API_URL = "https://namabackendmu.onrender.com";
+
+        // Fungsi MENGIRIM input (berjalan asinkron saat tombol ditekan)
+        function sendInput(action, targetX=0, targetY=0) {
+            let url = `http://127.0.0.1:8000/action/${action}`;
+            if (action === 'wall') url += `?x=${targetX}&y=${targetY}`;
+            fetch(url, { method: "POST" }); // Kita tidak perlu menunggu balasan
+        }
+
+        function changeLevel(levelId) {
+            fetch(`http://127.0.0.1:8000/load_level/${levelId}`, { method: "POST" });
+        }
+
+        function drawState(state) {
+            // Sesuaikan ukuran canvas secara dinamis berdasarkan JSON!
+            canvas.width = state.width * TILE_SIZE;
+            canvas.height = state.height * TILE_SIZE;
+            
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+            // 1. Gambar Grid & Lantai (Path)
+            ctx.strokeStyle = "#444";
+            for (let i = 0; i < state.width; i++) {
+                for (let j = 0; j < state.height; j++) {
+                    ctx.strokeRect(i * TILE_SIZE, j * TILE_SIZE, TILE_SIZE, TILE_SIZE);
+                }
+            }
+
+            // 2. Gambar Finish (Hijau Neon)
+            ctx.fillStyle = "#32CD32";
+            ctx.fillRect(state.finish[0] * TILE_SIZE, state.finish[1] * TILE_SIZE, TILE_SIZE, TILE_SIZE);
+
+            // 3. Gambar Tembok Statis (Hitam)
+            ctx.fillStyle = "#111";
+            state.walls.forEach(w => ctx.fillRect(w[0] * TILE_SIZE, w[1] * TILE_SIZE, TILE_SIZE, TILE_SIZE));
+
+            // Di dalam drawState() index.html
+            // 4. Gambar Pintu Tertutup (Coklat)
+            ctx.fillStyle = "#8B4513";
+            state.doors.forEach(d => ctx.fillRect(d[0] * TILE_SIZE, d[1] * TILE_SIZE, TILE_SIZE, TILE_SIZE));
+
+            // 5. Gambar Movable Blocks (Abu-abu kotak dalam)
+            ctx.fillStyle = "#888";
+            state.movable_blocks.forEach(m => {
+                ctx.fillRect(m[0] * TILE_SIZE + 5, m[1] * TILE_SIZE + 5, TILE_SIZE - 10, TILE_SIZE - 10);
+            });
+
+            // 6. Gambar Tombol (Kuning Emas, Lingkaran Pipih)
+            ctx.fillStyle = "#FFD700";
+            state.buttons.forEach(b => {
+                ctx.beginPath();
+                ctx.arc(b[0]*TILE_SIZE + 25, b[1]*TILE_SIZE + 25, 12, 0, Math.PI*2);
+                ctx.fill();
+            });
+
+            // Gambar Bayangan (Bergerak Otonom)
+            ctx.fillStyle = "rgba(255, 50, 50, 0.6)";
+            state.shadows.forEach(s => {
+                ctx.beginPath();
+                ctx.arc(s[0]*TILE_SIZE + 25, s[1]*TILE_SIZE + 25, 15, 0, Math.PI*2);
+                ctx.fill();
+            });
+
+            // Gambar Pemain
+            ctx.fillStyle = "#00BFFF";
+            ctx.beginPath();
+            ctx.arc(state.player[0]*TILE_SIZE + 25, state.player[1]*TILE_SIZE + 25, 18, 0, Math.PI*2);
+            ctx.fill();
+
+            // --- VICTORY OVERLAY ---
+            if (state.is_won) {
+                // Buat latar belakang semitransparan agar peta tetap terlihat
+                ctx.fillStyle = "rgba(0, 0, 0, 0.75)";
+                ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+                // Konfigurasi teks
+                ctx.textAlign = "center";
+                
+                // Judul
+                ctx.fillStyle = "#FFD700"; // Warna emas
+                ctx.font = "bold 36px monospace";
+                ctx.fillText("LEVEL CLEARED!", canvas.width / 2, canvas.height / 2 - 40);
+                
+                // Statistik
+                ctx.fillStyle = "#FFFFFF";
+                ctx.font = "20px monospace";
+                ctx.fillText(`Bayangan Digunakan : ${state.stats.shadows_used}`, canvas.width / 2, canvas.height / 2 + 10);
+                ctx.fillText(`Total Pergerakan   : ${state.stats.moves_done} langkah`, canvas.width / 2, canvas.height / 2 + 40);
+
+                // Instruksi Lanjutan
+                ctx.fillStyle = "#AAAAAA";
+                ctx.font = "16px monospace";
+                ctx.fillText("Tekan R untuk Ulangi", canvas.width / 2, canvas.height / 2 + 90);
+            }
+        }
+
+        // --- RENDER LOOP ---
+        async function syncWithServer() {
+            try {
+                const res = await fetch("http://127.0.0.1:8000/state");
+                const state = await res.json();
+                drawState(state);
+            } catch (e) {}
+            
+            // Terus panggil fungsi ini secepat mungkin (sekitar 60fps)
+            requestAnimationFrame(syncWithServer);
+        }
+
+        // Kontrol Keyboard
+        window.addEventListener("keydown", async (e) => {
+            // Ambil state terbaru untuk mengecek apakah sedang menang
+            const res = await fetch("http://127.0.0.1:8000/state");
+            const currentState = await res.json();
+
+            // Jika sudah menang, HANYA izinkan tombol R
+            if (currentState.is_won) {
+                if (e.key === "r" || e.key === "R") sendInput("reset");
+                return; // Blokir input WASD dan T
+            }
+
+            // Kontrol Normal
+            if (e.key === "w" || e.key === "W") sendInput("up");
+            if (e.key === "s" || e.key === "S") sendInput("down");
+            if (e.key === "a" || e.key === "A") sendInput("left");
+            if (e.key === "d" || e.key === "D") sendInput("right");
+            if (e.key === "t" || e.key === "T") sendInput("rewind");
+            if (e.key === "r" || e.key === "R") sendInput("reset");
+        });
+
+        // Kontrol Mouse
+        // Wall creation Deprecated
+        // canvas.addEventListener("mousedown", (e) => {
+        //     const rect = canvas.getBoundingClientRect();
+        //     const x = Math.floor((e.clientX - rect.left) / TILE_SIZE);
+        //     const y = Math.floor((e.clientY - rect.top) / TILE_SIZE);
+        //     sendInput("wall", x, y);
+        // });
+
+        // Mulai kamera CCTV
+        syncWithServer();
+    </script>
+</body>
+</html>
